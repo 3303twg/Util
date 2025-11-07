@@ -1,83 +1,86 @@
-using System.Collections;
+﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.Linq;
 using UnityEngine;
 using UnityEngine.SceneManagement;
-using UnityEngine.UI;
-using System.Linq;
-public class UIManager : MonoBehaviour
+
+public class UIManager : Singleton<UIManager>
 {
-    private Dictionary<string, GameObject> uiElements = new Dictionary<string, GameObject>();
+    private readonly Dictionary<Type, GameObject> UIDic = new();
+    private Stack<Type> uiStack = new();
 
-    [SerializeField]
-    public GameObject[] uiObjects;
-    GameObject[] objects;
+    [SerializeField] private Transform parentObj; // 반드시 인스펙터에서 지정
 
-
-
-
-    private void Awake()
+    protected override void Awake()
     {
-        SceneManager.sceneLoaded += OnSceneLoaded;
+        base.Awake();
+        SceneManager.sceneLoaded += (_, _) => uiStack.Clear();
     }
 
     private void OnDestroy()
     {
-        SceneManager.sceneLoaded -= OnSceneLoaded;
+        SceneManager.sceneLoaded -= (_, _) => uiStack.Clear();
     }
 
-    private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+    public void OpenUI<T>() where T : Component => OpenUI(typeof(T));
+    public void CloseUI<T>() where T : Component => CloseUI(typeof(T));
+    public void SwitchUI<TFrom, TTo>() where TFrom : Component where TTo : Component
+        => SwitchUI(typeof(TFrom), typeof(TTo));
+
+    public void OpenUI(Type type)
     {
-        GetUI();
+        GameObject ui = GetUI(type);
+        if (ui == null || ui.activeSelf) return;
+
+        ui.SetActive(true);
+        uiStack.Push(type);
+
+        // 정렬 순서 자동 증가
+        if (ui.TryGetComponent(out Canvas canvas))
+            canvas.sortingOrder = uiStack.Count;
     }
 
-    private void GetUI()
+    public void CloseUI(Type type)
     {
-        GameObject parent = GameObject.Find("Canvas");
-        if (parent != null)
-        {
-            objects = new GameObject[parent.transform.childCount];
-
-            for (int i = 0; i < parent.transform.childCount; i++)
-            {
-                objects[i] = parent.transform.GetChild(i).gameObject;
-            }
-
-        }
-
-        uiObjects = objects
-            .Where(obj => obj != null && obj.CompareTag("UI"))
-            .ToArray();
+        GameObject ui = GetUI(type);
+        if (ui == null) return;
 
 
-        foreach (var uiObject in uiObjects)
-        {
-            uiElements[uiObject.name] = uiObject;
-            //UI Object Init
-            //uiObject.GetComponent<BaseUI>().Init_Active();
-        }
-    }
-    
-    public void ShowUI(string uiName)
-    {
-        if (uiElements.ContainsKey(uiName))
-        {
-            uiElements[uiName].SetActive(true);
-        }
+        uiStack = new Stack<Type>(uiStack.Where(t => t != type).Reverse());
+
+        ui.SetActive(false);
     }
 
-    public void HideUI(string uiName)
+    public void SwitchUI(Type from, Type to)
     {
-        if (uiElements.ContainsKey(uiName))
-        {
-            uiElements[uiName].SetActive(false);
-        }
+        CloseUI(from, isSwitching: true);
+        OpenUI(to);
     }
 
-    public void ToggleUI(string uiName)
+    private GameObject GetUI(Type type)
     {
-        if (uiElements.ContainsKey(uiName))
+        // parentObj는 반드시 인스펙터에서 직접 지정
+        if (parentObj == null)
         {
-            uiElements[uiName].SetActive(!uiElements[uiName].activeSelf);
+            Debug.LogError($"UIManager의 parentObj가 지정되지 않았습니다! {type.Name} UI를 생성할 수 없습니다.");
+            return null;
         }
+
+        if (UIDic.TryGetValue(type, out var ui))
+            return ui;
+
+        GameObject prefab = Resources.Load<GameObject>($"UI/{type.Name}");
+        if (prefab == null)
+        {
+            Debug.LogError($"UI Prefab이 Resources/UI/{type.Name} 경로에 없습니다.");
+            return null;
+        }
+
+        ui = Instantiate(prefab, parentObj);
+        ui.SetActive(false);
+        UIDic[type] = ui;
+        return ui;
     }
 }
